@@ -278,34 +278,129 @@ class RPG(commands.Cog, name="rpg"):
         return
 
     @commands.hybrid_command(
-        name="character", 
+        name="character",
         description="Your character details."
     )
     async def character(self, context: Context, id: Optional[str] = None) -> None:
         user = await self.bot.database.connect_user(context.author.id)
         chars = json.loads(user["character"])
+
         if len(chars) <= 0:
             return await context.send(content="Seems like you're new, type `/start` to start your journey!")
-        if Utils.find(id, chars, key="id") is not None:
-            data = Utils.find(id, chars, key="id")
-            templates = {
-                "detail": Messages.charDetailPage,
-                "amp_res": Messages.amplificationResistancePage,
-                "skills": Messages.skillPage,
-                "story": Messages.storyPage
-            }
-            pagination = Interface.PaginationRPGCharDetail(context)
-            pagination.create(
-                data=data, 
-                template=templates
-            )
-            return await pagination.start()
+
+        if id == "equip":
+            return await self._handle_equip(context, chars)
+        elif id == "unequip":
+            return await self._handle_unequip(context, chars)
+        elif id == "party":
+            return await self._handle_party(context, chars)
+        elif id is not None and Utils.find(id, chars, key="id") is not None:
+            return await self._show_character_details(context, chars, id)
+        else:
+            return await self._show_character_list(context, chars)
+
+    async def _show_character_details(self, context: Context, chars: list, id: str) -> None:
+        data = Utils.find(id, chars, key="id")
+        templates = {
+            "detail": Messages.charDetailPage,
+            "amp_res": Messages.amplificationResistancePage,
+            "skills": Messages.skillPage,
+            "story": Messages.storyPage
+        }
+        pagination = Interface.PaginationRPGCharDetail(context)
+        pagination.create(data=data, template=templates)
+        await pagination.start()
+
+    async def _show_character_list(self, context: Context, chars: list) -> None:
         pagination = Interface.PaginationRPGCharList(context)
-        pagination.create(
-            data=chars,
-            template=Messages.charListPage.strip()
+        pagination.create(data=chars, template=Messages.charListPage.strip())
+        await pagination.start()
+
+    async def _handle_equip(self, context: Context, chars: list) -> None:
+        show = [char for char in chars if char["showdown"]]
+        if len(show) >= 3:
+            return await context.send(content="Your party is full, please unequip a character with `/character unequip`.")
+
+        select = Interface.Select(context)
+        view = select(
+            message="Please select a character.",
+            value=[
+                (char["name"], char["id"], f"Choose to add {char['name']} to your party.", "📍") 
+                for char in chars if not char["showdown"]
+            ]
         )
-        return await pagination.start()
+        response = await view.show()
+        selected = Utils.find(response.response, chars)
+        chars = Utils.overwrite({"showdown": True}, chars, id=response.response)
+
+        party_description = "\n".join(
+            f"- {char['name']} `{char['class']}` *{char['element']}*" 
+            for char in chars if char["showdown"]
+        )
+        embed = discord.Embed(
+            description=(
+                f"Successfully added **{selected['name']}** to your party.\n"
+                "----------\n"
+                "Your current party:\n"
+                f"{party_description}"
+            ),
+            color=0xBEBEFE
+        )
+        user = await self.bot.database.connect_user(context.author.id)
+        user["character"] = json.dumps(chars)
+        await self.bot.database.update_user(context.author.id, user)
+        await context.send(embed=embed)
+
+    async def _handle_unequip(self, context: Context, chars: list) -> None:
+        show = [char for char in chars if char["showdown"]]
+        if len(show) == 0:
+            return await context.send(content="Your party is empty. To add a character, type `/character equip`.")
+
+        select = Interface.Select(context)
+        view = select(
+            message="Please select a character.",
+            value=[
+                (char["name"], char["id"], f"Choose to remove {char['name']} from your party.", "📍") 
+                for char in chars if char["showdown"]
+            ]
+        )
+        response = await view.show()
+        selected = Utils.find(response.response, chars)
+        chars = Utils.overwrite({"showdown": False}, chars, id=response.response)
+
+        party_description = "\n".join(
+            f"- {char['name']} `{char['class']}` *{char['element']}*" 
+            for char in chars if char["showdown"]
+        ) or "Your party is empty."
+        embed = discord.Embed(
+            description=(
+                f"Successfully removed **{selected['name']}** from your party.\n"
+                "----------\n"
+                "Your current party:\n"
+                f"{party_description}"
+            ),
+            color=0xBEBEFE
+        )
+        user = await self.bot.database.connect_user(context.author.id)
+        user["character"] = json.dumps(chars)
+        await self.bot.database.update_user(context.author.id, user)
+        embed.set_footer(text=f"Requested by {context.author}")
+        await context.send(embed=embed)
+
+    async def _handle_party(self, context: Context, chars: list) -> None:
+        party_description = "\n".join(
+            f"- {char['name']} `{char['class']}` *{char['element']}*" 
+            for char in chars if char["showdown"]
+        ) or "Your party is empty."
+        embed = discord.Embed(
+            description=(
+                "Your current party:\n"
+                f"{party_description}"
+            ),
+            color=0xBEBEFE
+        )
+        embed.set_footer(text=f"Requested by {context.author}")
+        await context.send(embed=embed)
     
     @character.autocomplete('id')
     async def character_autocomplete(
